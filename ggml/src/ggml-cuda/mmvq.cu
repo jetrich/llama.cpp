@@ -1110,14 +1110,16 @@ static void mul_mat_vec_q_switch_ncols_dst(
         // pay for the cross-warp reduction, but only widen when the grid still has several blocks per SM.
         // GGML_CUDA_MMVQ_SMALLK_ITERS overrides the limit, 1 restores the upstream single-iteration rule.
         // The kernel reads all rows of the last block without a bounds check, so the widened rule
-        // only applies when nwarps divides nrows_x.
+        // only applies when nwarps divides nrows_x. Measured gains are on Ampere, on a P40 it costs
+        // 3-5% on K-quant models, so older and non-NVIDIA GPUs keep the upstream rule.
         static const int small_k_iters = [] {
             const char * env = getenv("GGML_CUDA_MMVQ_SMALLK_ITERS");
             return env ? std::max(1, atoi(env)) : 3;
         }();
         const int  nwarps = calc_nwarps(type, c_ncols_dst, table_id);
         const int  nsm    = ggml_cuda_info().devices[device].nsm;
-        const bool widen  = nwarps > 0 && nrows_x % nwarps == 0 && nrows_x / nwarps >= 4 * nsm;
+        const bool widen  = GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_AMPERE &&
+                            nwarps > 0 && nrows_x % nwarps == 0 && nrows_x / nwarps >= 4 * nsm;
         const int  iters  = widen ? small_k_iters : 1;
         bool       use    = nwarps > 1 && blocks_per_row_x < iters * nwarps * blocks_per_iter_1warp;
 
