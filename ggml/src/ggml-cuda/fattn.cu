@@ -709,6 +709,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel_auto(const int device, 
                 if (!gqa_opt_applies) {
                     return BEST_FATTN_KERNEL_VEC;
                 }
+                // With no power-of-2 GQA factor the tile kernel cannot share KV loads between heads and
+                // pads the single query to two columns. On a P40 the vector kernel is 12-36% faster
+                // end to end for GQA 3 (llama3.2-3b), from depth 0 to 16K.
+                if (GGML_CUDA_CC_IS_NVIDIA(cc) && gqa_ratio_eff == 1) {
+                    return BEST_FATTN_KERNEL_VEC;
+                }
             }
         } else {
             if (Q->ne[1] <= 2) {
