@@ -538,7 +538,7 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
     }
 }
 
-static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
+static best_fattn_kernel ggml_cuda_get_best_fattn_kernel_auto(const int device, const ggml_tensor * dst) {
 #ifndef FLASH_ATTN_AVAILABLE
     GGML_UNUSED(device); GGML_UNUSED(dst);
     return BEST_FATTN_KERNEL_NONE;
@@ -717,6 +717,29 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
     return BEST_FATTN_KERNEL_TILE;
+}
+
+// Experiment: GGML_CUDA_FATTN_DECODE=vec|tile forces the kernel for single-token decode when the
+// automatic choice is one of the two, to compare them per device, model and KV type.
+static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
+    const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel_auto(device, dst);
+    static const char * force = getenv("GGML_CUDA_FATTN_DECODE");
+    if (force == nullptr || (kernel != BEST_FATTN_KERNEL_VEC && kernel != BEST_FATTN_KERNEL_TILE)) {
+        return kernel;
+    }
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    if (Q->ne[1] != 1) {
+        return kernel;
+    }
+    if (strcmp(force, "tile") == 0) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
+    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    if (strcmp(force, "vec") == 0 && can_use_vector_kernel) {
+        return BEST_FATTN_KERNEL_VEC;
+    }
+    return kernel;
 }
 
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
