@@ -1106,8 +1106,17 @@ static void mul_mat_vec_q_switch_ncols_dst(
     const auto should_use_small_k = [&](int c_ncols_dst) {
         // When K is small, increase rows_per_block to match nwarps so each warp has more work to do
         // Trigger when the full thread block covers all K blocks in a single loop iteration and few threads remain idle.
+        // Short K loops (up to small_k_iters block iterations) also leave too little work per warp to
+        // pay for the cross-warp reduction, but only widen when the grid still has several blocks per SM.
+        // GGML_CUDA_MMVQ_SMALLK_ITERS overrides the limit, 1 restores the upstream single-iteration rule.
+        static const int small_k_iters = [] {
+            const char * env = getenv("GGML_CUDA_MMVQ_SMALLK_ITERS");
+            return env ? std::max(1, atoi(env)) : 3;
+        }();
         const int  nwarps = calc_nwarps(type, c_ncols_dst, table_id);
-        bool       use    = nwarps > 1 && blocks_per_row_x < nwarps * blocks_per_iter_1warp;
+        const int  nsm    = ggml_cuda_info().devices[device].nsm;
+        const int  iters  = nrows_x / std::max(nwarps, 1) >= 4 * nsm ? small_k_iters : 1;
+        bool       use    = nwarps > 1 && blocks_per_row_x < iters * nwarps * blocks_per_iter_1warp;
 
         constexpr std::array<ggml_type, 2> iq_slow_turing = {
             GGML_TYPE_IQ3_XXS,
